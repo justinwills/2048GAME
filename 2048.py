@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import random
 from pathlib import Path
 
@@ -14,7 +15,9 @@ DEFAULT_WEIGHTS = {
 }
 
 WEIGHTS_FILE = Path(__file__).with_name("best_weights.json")
+NN_MODEL_FILE = Path(__file__).with_name("supervised_2048_model.pt")
 weights = DEFAULT_WEIGHTS.copy()
+MOVE_KEYS = ["w", "s", "a", "d"]
 
 def create_board():
     return [[0 for _ in range(SIZE)] for _ in range(SIZE)]
@@ -61,6 +64,12 @@ def save_weights(best_weights, path=WEIGHTS_FILE):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(best_weights, f, indent=2)
         f.write("\n")
+
+
+def console_text(value):
+    text = str(value)
+    encoding = getattr(__import__("sys").stdout, "encoding", None) or "utf-8"
+    return text.encode(encoding, errors="replace").decode(encoding)
 
 
 def set_weights(new_weights):
@@ -138,6 +147,9 @@ moves = {
     "a": move_left,
     "d": move_right
 }
+
+MOVE_TO_INDEX = {key: index for index, key in enumerate(MOVE_KEYS)}
+INDEX_TO_MOVE = {index: key for key, index in MOVE_TO_INDEX.items()}
 
 
 def can_move(board):
@@ -333,17 +345,7 @@ def ai_move(board, depth=3):
 
     return best_move
 
-def choose_depth(board):
-    biggest = max_tile(board)
-
-    if biggest >= 1024:
-        return 5
-    elif biggest >= 512:
-        return 4
-    else:
-        return 3
-    
-def play_game(show=False, depth=4, adaptive_depth=True, seed=None, strategy_weights=None):
+def play_game(show=False, depth=4, seed=None, strategy_weights=None):
     if seed is not None:
         random.seed(seed)
 
@@ -361,9 +363,7 @@ def play_game(show=False, depth=4, adaptive_depth=True, seed=None, strategy_weig
         if show:
             print_board(board, score)
 
-        current_depth = choose_depth(board) if adaptive_depth else depth
-
-        command = ai_move(board, depth=current_depth)
+        command = ai_move(board, depth=depth)
 
         if command is None:
             break
@@ -379,7 +379,7 @@ def play_game(show=False, depth=4, adaptive_depth=True, seed=None, strategy_weig
     return score, max_tile(board), steps
 
 
-def run_experiments(n=200, depth=4, adaptive_depth=True, strategy_weights=None):
+def run_experiments(n=200, depth=4, strategy_weights=None):
     scores = []
     max_tiles = []
     steps_list = []
@@ -389,7 +389,6 @@ def run_experiments(n=200, depth=4, adaptive_depth=True, strategy_weights=None):
         score, tile, steps = play_game(
             show=False,
             depth=depth,
-            adaptive_depth=adaptive_depth,
             strategy_weights=strategy_weights,
         )
 
@@ -406,7 +405,7 @@ def run_experiments(n=200, depth=4, adaptive_depth=True, strategy_weights=None):
 
     print("\n===== RESULTS =====")
     print("Games:", n)
-    print("Depth:", "adaptive" if adaptive_depth else depth)
+    print("Depth:", depth)
 
     print("\nAverage Score:", sum(scores) / n)
     print("Best Score:", max(scores))
@@ -466,7 +465,7 @@ def crossover(a, b):
     }
 
 
-def evaluate_weights(candidate, seeds, depth=3, adaptive_depth=False):
+def evaluate_weights(candidate, seeds, depth=3):
     scores = []
     tiles = []
     steps_list = []
@@ -475,7 +474,6 @@ def evaluate_weights(candidate, seeds, depth=3, adaptive_depth=False):
         score, tile, steps = play_game(
             show=False,
             depth=depth,
-            adaptive_depth=adaptive_depth,
             seed=seed,
             strategy_weights=candidate,
         )
@@ -514,7 +512,6 @@ def evolve_weights(
     population_size=10,
     games_per_candidate=5,
     depth=3,
-    adaptive_depth=False,
     elite_count=2,
     seed=42,
 ):
@@ -533,7 +530,7 @@ def evolve_weights(
         scored_population = []
 
         for candidate in population:
-            metrics = evaluate_weights(candidate, seeds, depth=depth, adaptive_depth=adaptive_depth)
+            metrics = evaluate_weights(candidate, seeds, depth=depth)
             scored_population.append((metrics, candidate))
             archive.append(candidate.copy())
 
@@ -572,7 +569,7 @@ def evolve_weights(
         if key in seen:
             continue
         seen.add(key)
-        metrics = evaluate_weights(candidate, validation_seeds, depth=depth, adaptive_depth=adaptive_depth)
+        metrics = evaluate_weights(candidate, validation_seeds, depth=depth)
         validation_results.append((metrics, candidate))
 
     validation_results.sort(key=lambda item: item[0]["fitness"], reverse=True)
@@ -586,12 +583,12 @@ def evolve_weights(
     return validation_best, validation_metrics
 
 
-def compare_weights(games=20, depth=3, adaptive_depth=False, seed=2026):
+def compare_weights(games=20, depth=3, seed=2026):
     best = load_weights()
     seeds = [seed + i for i in range(games)]
 
-    baseline_metrics = evaluate_weights(DEFAULT_WEIGHTS.copy(), seeds, depth=depth, adaptive_depth=adaptive_depth)
-    evolved_metrics = evaluate_weights(best, seeds, depth=depth, adaptive_depth=adaptive_depth)
+    baseline_metrics = evaluate_weights(DEFAULT_WEIGHTS.copy(), seeds, depth=depth)
+    evolved_metrics = evaluate_weights(best, seeds, depth=depth)
 
     print("===== BASELINE DEFAULT WEIGHTS =====")
     print_metrics(baseline_metrics)
@@ -604,6 +601,280 @@ def compare_weights(games=20, depth=3, adaptive_depth=False, seed=2026):
     improvement = evolved_metrics["avg_score"] - baseline_metrics["avg_score"]
     percentage = improvement / baseline_metrics["avg_score"] * 100 if baseline_metrics["avg_score"] else 0
     print(f"\nAverage score change: {improvement:.2f} ({percentage:.2f}%)")
+
+
+def import_torch():
+    try:
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+    except ImportError as exc:
+        raise SystemExit(
+            "PyTorch is required for supervised learning. Install it with: pip install torch"
+        ) from exc
+
+    return torch, nn, DataLoader, TensorDataset
+
+
+def board_to_features(board):
+    features = []
+
+    for row in board:
+        for value in row:
+            if value == 0:
+                features.append(0.0)
+            else:
+                features.append(math.log2(value) / 16.0)
+
+    return features
+
+
+def collect_supervised_samples(
+    games=100,
+    depth=2,
+    seed=2026,
+    strategy_weights=None,
+    max_samples=None,
+):
+    if strategy_weights is not None:
+        set_weights(strategy_weights)
+
+    samples = []
+    labels = []
+
+    for game_index in range(games):
+        random.seed(seed + game_index)
+        board = create_board()
+        add_random_tile(board)
+        add_random_tile(board)
+
+        while can_move(board):
+            command = ai_move(board, depth=depth)
+
+            if command is None:
+                break
+
+            samples.append(board_to_features(board))
+            labels.append(MOVE_TO_INDEX[command])
+
+            new_board, _ = moves[command](board)
+            if new_board == board:
+                break
+
+            board = new_board
+            add_random_tile(board)
+
+            if max_samples is not None and len(samples) >= max_samples:
+                return samples, labels
+
+    return samples, labels
+
+
+def build_policy_network(nn):
+    return nn.Sequential(
+        nn.Linear(SIZE * SIZE, 128),
+        nn.ReLU(),
+        nn.Linear(128, 64),
+        nn.ReLU(),
+        nn.Linear(64, len(MOVE_KEYS)),
+    )
+
+
+def train_supervised_model(
+    games=100,
+    depth=2,
+    epochs=20,
+    batch_size=128,
+    learning_rate=0.001,
+    seed=2026,
+    use_best=True,
+    max_samples=None,
+    model_path=NN_MODEL_FILE,
+):
+    torch, nn, DataLoader, TensorDataset = import_torch()
+    random.seed(seed)
+    torch.manual_seed(seed)
+
+    strategy_weights = load_weights() if use_best else DEFAULT_WEIGHTS.copy()
+    samples, labels = collect_supervised_samples(
+        games=games,
+        depth=depth,
+        seed=seed,
+        strategy_weights=strategy_weights,
+        max_samples=max_samples,
+    )
+
+    if len(samples) < 10:
+        raise SystemExit("Not enough training samples were collected.")
+
+    x = torch.tensor(samples, dtype=torch.float32)
+    y = torch.tensor(labels, dtype=torch.long)
+
+    order = torch.randperm(len(x))
+    x = x[order]
+    y = y[order]
+
+    train_count = max(1, int(len(x) * 0.8))
+    if train_count == len(x):
+        train_count = len(x) - 1
+
+    x_train, y_train = x[:train_count], y[:train_count]
+    x_val, y_val = x[train_count:], y[train_count:]
+
+    train_loader = DataLoader(
+        TensorDataset(x_train, y_train),
+        batch_size=batch_size,
+        shuffle=True,
+    )
+
+    model = build_policy_network(nn)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    loss_function = nn.CrossEntropyLoss()
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        total_loss = 0.0
+        correct = 0
+        total = 0
+
+        for batch_x, batch_y in train_loader:
+            optimizer.zero_grad()
+            logits = model(batch_x)
+            loss = loss_function(logits, batch_y)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item() * len(batch_x)
+            predicted = logits.argmax(dim=1)
+            correct += (predicted == batch_y).sum().item()
+            total += len(batch_x)
+
+        model.eval()
+        with torch.no_grad():
+            val_logits = model(x_val)
+            val_loss = loss_function(val_logits, y_val).item()
+            val_accuracy = (val_logits.argmax(dim=1) == y_val).float().mean().item()
+
+        print(
+            f"Epoch {epoch}/{epochs}: "
+            f"loss={total_loss / total:.4f}, "
+            f"acc={correct / total * 100:.2f}%, "
+            f"val_loss={val_loss:.4f}, "
+            f"val_acc={val_accuracy * 100:.2f}%"
+        )
+
+    torch.save(
+        {
+            "state_dict": model.state_dict(),
+            "input_size": SIZE * SIZE,
+            "moves": MOVE_KEYS,
+            "features": "log2(tile)/16, 0 for empty",
+            "teacher": "heuristic expectimax",
+            "teacher_depth": depth,
+            "training_games": games,
+            "samples": len(samples),
+            "weights": strategy_weights,
+        },
+        model_path,
+    )
+
+    print(f"\nSaved supervised neural network to {console_text(model_path)}")
+    print(f"Collected samples: {len(samples)}")
+
+
+def load_policy_model(model_path=NN_MODEL_FILE):
+    torch, nn, _, _ = import_torch()
+
+    if not Path(model_path).exists():
+        raise SystemExit(f"Model file not found: {model_path}")
+
+    checkpoint = torch.load(model_path, map_location="cpu")
+    model = build_policy_network(nn)
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return torch, model, checkpoint
+
+
+def neural_move(board, torch, model):
+    features = torch.tensor([board_to_features(board)], dtype=torch.float32)
+
+    with torch.no_grad():
+        scores = model(features)[0]
+
+    ranked_moves = sorted(
+        range(len(MOVE_KEYS)),
+        key=lambda index: scores[index].item(),
+        reverse=True,
+    )
+
+    for index in ranked_moves:
+        command = INDEX_TO_MOVE[index]
+        new_board, _ = moves[command](board)
+        if new_board != board:
+            return command
+
+    return None
+
+
+def play_neural_game(torch, model, seed=None):
+    if seed is not None:
+        random.seed(seed)
+
+    board = create_board()
+    add_random_tile(board)
+    add_random_tile(board)
+
+    score = 0
+    steps = 0
+
+    while can_move(board):
+        command = neural_move(board, torch, model)
+
+        if command is None:
+            break
+
+        new_board, gained = moves[command](board)
+        if new_board != board:
+            board = new_board
+            score += gained
+            steps += 1
+            add_random_tile(board)
+
+    return score, max_tile(board), steps
+
+
+def evaluate_neural_model(games=50, seed=2026, model_path=NN_MODEL_FILE):
+    torch, model, checkpoint = load_policy_model(model_path)
+    scores = []
+    tiles = []
+    steps_list = []
+
+    for game_index in range(games):
+        score, tile, steps = play_neural_game(torch, model, seed=seed + game_index)
+        scores.append(score)
+        tiles.append(tile)
+        steps_list.append(steps)
+        print(f"Game {game_index + 1}: Score={score}, MaxTile={tile}, Steps={steps}")
+
+    metrics = {
+        "fitness": (
+            sum(scores) / games
+            + (sum(tiles) / games) * 20
+            + (sum(steps_list) / games) * 2
+            + (sum(1 for tile in tiles if tile >= 2048) / games) * 5000
+        ),
+        "avg_score": sum(scores) / games,
+        "avg_tile": sum(tiles) / games,
+        "avg_steps": sum(steps_list) / games,
+        "best_score": max(scores),
+        "best_tile": max(tiles),
+        "success_2048": sum(1 for tile in tiles if tile >= 2048) / games,
+    }
+
+    print("\n===== SUPERVISED NEURAL NETWORK RESULTS =====")
+    print_metrics(metrics)
+    print("Teacher:", checkpoint.get("teacher", "unknown"))
+    print("Training samples:", checkpoint.get("samples", "unknown"))
 
 
 def print_metrics(metrics):
@@ -630,7 +901,6 @@ def main():
     run_parser = subparsers.add_parser("run", help="Run normal experiments")
     run_parser.add_argument("--games", type=int, default=20)
     run_parser.add_argument("--depth", type=int, default=4)
-    run_parser.add_argument("--adaptive-depth", action="store_true")
     run_parser.add_argument("--use-best", action="store_true")
 
     evolve_parser = subparsers.add_parser("evolve", help="Optimize heuristic weights with a genetic algorithm")
@@ -638,14 +908,34 @@ def main():
     evolve_parser.add_argument("--population", type=int, default=10)
     evolve_parser.add_argument("--games", type=int, default=5)
     evolve_parser.add_argument("--depth", type=int, default=3)
-    evolve_parser.add_argument("--adaptive-depth", action="store_true")
     evolve_parser.add_argument("--seed", type=int, default=42)
 
     compare_parser = subparsers.add_parser("compare", help="Compare default weights with best_weights.json")
     compare_parser.add_argument("--games", type=int, default=20)
     compare_parser.add_argument("--depth", type=int, default=3)
-    compare_parser.add_argument("--adaptive-depth", action="store_true")
     compare_parser.add_argument("--seed", type=int, default=2026)
+
+    train_nn_parser = subparsers.add_parser(
+        "train-nn",
+        help="Train a supervised neural network from heuristic AI labels",
+    )
+    train_nn_parser.add_argument("--games", type=int, default=100)
+    train_nn_parser.add_argument("--depth", type=int, default=2)
+    train_nn_parser.add_argument("--epochs", type=int, default=20)
+    train_nn_parser.add_argument("--batch-size", type=int, default=128)
+    train_nn_parser.add_argument("--learning-rate", type=float, default=0.001)
+    train_nn_parser.add_argument("--seed", type=int, default=2026)
+    train_nn_parser.add_argument("--use-default", action="store_true")
+    train_nn_parser.add_argument("--max-samples", type=int, default=None)
+    train_nn_parser.add_argument("--model", type=Path, default=NN_MODEL_FILE)
+
+    eval_nn_parser = subparsers.add_parser(
+        "eval-nn",
+        help="Evaluate the supervised neural network policy",
+    )
+    eval_nn_parser.add_argument("--games", type=int, default=50)
+    eval_nn_parser.add_argument("--seed", type=int, default=2026)
+    eval_nn_parser.add_argument("--model", type=Path, default=NN_MODEL_FILE)
 
     args = parser.parse_args()
 
@@ -655,22 +945,37 @@ def main():
             population_size=args.population,
             games_per_candidate=args.games,
             depth=args.depth,
-            adaptive_depth=args.adaptive_depth,
             seed=args.seed,
         )
     elif args.command == "compare":
         compare_weights(
             games=args.games,
             depth=args.depth,
-            adaptive_depth=args.adaptive_depth,
             seed=args.seed,
+        )
+    elif args.command == "train-nn":
+        train_supervised_model(
+            games=args.games,
+            depth=args.depth,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            seed=args.seed,
+            use_best=not args.use_default,
+            max_samples=args.max_samples,
+            model_path=args.model,
+        )
+    elif args.command == "eval-nn":
+        evaluate_neural_model(
+            games=args.games,
+            seed=args.seed,
+            model_path=args.model,
         )
     else:
         selected_weights = load_weights() if getattr(args, "use_best", False) else DEFAULT_WEIGHTS.copy()
         run_experiments(
             n=getattr(args, "games", 20),
             depth=getattr(args, "depth", 4),
-            adaptive_depth=getattr(args, "adaptive_depth", False),
             strategy_weights=selected_weights,
         )
 
