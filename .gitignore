@@ -1,0 +1,15 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Large generated datasets/models (keep local)
+dataset.csv
+sl_dataset.npz
+strong_2048_model.pth
+models/*.pth
+models/*.pt
+result/*.pth
+
+# OS/editor files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,11 @@
+
+EVALUATION RESULTS
+
+Average Score: 8864.32
+Best Score: 31528
+Average Tile: 620.8
+Average Steps: 563.34
+Best Tile: 2048
+2048 Count: 3
+Tile Counts:
+{512: 40, 1024: 28, 256: 24, 128: 5, 2048: 3}

@@ -1,0 +1,21 @@
+{
+  "weights": {
+    "empty": 1284.8,
+    "biggest": 0.5,
+    "smooth": 0.9,
+    "corner": 26.2,
+    "mono": 20.0
+  },
+  "fitness": 8637.0,
+  "benchmark": {
+    "games": 10,
+    "depth": 3,
+    "seed": 123,
+    "baseline_avg_score": 6446.4,
+    "evolved_avg_score": 9296.4,
+    "improvement_percent": 44.2,
+    "baseline_best_tile": 512,
+    "evolved_best_tile": 2048
+  },
+  "note": "Found by (mu+lambda) ES after 10 generations (demo run). Run python evolutionary_computation.py with more games for stronger evidence."
+}

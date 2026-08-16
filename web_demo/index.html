@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>2048</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>2048</h1>
+      <p class="subtitle">Join the tiles, get to <strong>2048</strong>!</p>
+      <div class="scores">
+        <div class="score-box">
+          <span class="score-label">Score</span>
+          <span id="score" class="score-value">0</span>
+        </div>
+        <div class="score-box">
+          <span class="score-label">Best</span>
+          <span id="best-score" class="score-value">0</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="auto-play" class="btn-auto-play" type="button">Auto Play</button>
+        <button id="new-game" class="btn-new-game" type="button">New Game</button>
+      </div>
+    </header>
+
+    <div class="game-container">
+      <div class="grid-board">
+        <div id="grid-background" class="grid-background"></div>
+        <div id="tile-container" class="tile-container"></div>
+      </div>
+      <div id="game-message" class="game-message hidden" aria-live="polite">
+        <p id="message-text"></p>
+        <button id="try-again" class="btn-retry" type="button">Try again</button>
+      </div>
+    </div>
+
+    <p class="instructions">
+      Use <strong>arrow keys</strong> or <strong>W A S D</strong> to move tiles.
+      On touch devices, swipe on the board.
+      Press <strong>Auto Play</strong> to run the same AI as <code>2048.py</code>.
+    </p>
+  </div>
+
+  <script src="ai.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
